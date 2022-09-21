@@ -50,6 +50,7 @@ import java.util.random.RandomGenerator;
 import java.util.stream.DoubleStream;
 import java.util.stream.IntStream;
 import java.util.stream.LongStream;
+import jdk.internal.access.JavaLangAccess;
 import jdk.internal.access.JavaUtilConcurrentTLRAccess;
 import jdk.internal.access.SharedSecrets;
 import jdk.internal.util.random.RandomSupport;
@@ -169,14 +170,16 @@ public final class ThreadLocalRandom extends Random {
      * rely on (static) atomic generators to initialize the values.
      */
     static final void localInit() {
+        localInit(holder());
+    }
+
+    private static final void localInit(Object h) {
         int p = probeGenerator.addAndGet(PROBE_INCREMENT);
         int probe = (p == 0) ? 1 : p; // skip 0
         long seed = RandomSupport.mixMurmur64(seeder.getAndAdd(SEEDER_INCREMENT));
-        Thread t = Thread.currentThread();
-        U.putLong(t, SEED, seed);
-        U.putInt(t, PROBE, probe);
+        U.putLong(h, SEED, seed);
+        U.putInt(h, PROBE, probe);
     }
-
     /**
      * Returns the current thread's {@code ThreadLocalRandom} object.
      * Methods of this object should be called only by the current thread,
@@ -185,8 +188,9 @@ public final class ThreadLocalRandom extends Random {
      * @return the current thread's {@code ThreadLocalRandom}
      */
     public static ThreadLocalRandom current() {
-        if (U.getInt(Thread.currentThread(), PROBE) == 0)
-            localInit();
+        Object h;
+        if (U.getInt(h = holder(), PROBE) == 0)
+            localInit(h);
         return instance;
     }
 
@@ -219,8 +223,9 @@ public final class ThreadLocalRandom extends Random {
      */
     final long nextSeed() {
         Thread t; long r; // read and update per-thread seed
-        U.putLong(t = Thread.currentThread(), SEED,
-                  r = U.getLong(t, SEED) + (t.threadId() << 1) + GOLDEN_GAMMA);
+        Object h;
+        U.putLong(h = holder(t = Thread.currentThread()), SEED,
+                  r = U.getLong(h, SEED) + (t.threadId() << 1) + GOLDEN_GAMMA);
         return r;
     }
 
@@ -262,7 +267,7 @@ public final class ThreadLocalRandom extends Random {
      * can be used to force initialization on zero return.
      */
     static final int getProbe() {
-        return U.getInt(Thread.currentThread(), PROBE);
+        return U.getInt(holder(), PROBE);
     }
 
     /**
@@ -273,7 +278,7 @@ public final class ThreadLocalRandom extends Random {
         probe ^= probe << 13;   // xorshift
         probe ^= probe >>> 17;
         probe ^= probe << 5;
-        U.putInt(Thread.currentThread(), PROBE, probe);
+        U.putInt(holder(), PROBE, probe);
         return probe;
     }
 
@@ -282,7 +287,7 @@ public final class ThreadLocalRandom extends Random {
      */
     static final int nextSecondarySeed() {
         int r;
-        Thread t = Thread.currentThread();
+        var t = holder();
         if ((r = U.getInt(t, SECONDARY)) != 0) {
             r ^= r << 13;   // xorshift
             r ^= r >>> 17;
@@ -333,7 +338,7 @@ public final class ThreadLocalRandom extends Random {
         throws java.io.IOException {
 
         java.io.ObjectOutputStream.PutField fields = s.putFields();
-        fields.put("rnd", U.getLong(Thread.currentThread(), SEED));
+        fields.put("rnd", U.getLong(holder(), SEED));
         fields.put("initialized", true);
         s.writeFields();
     }
@@ -374,32 +379,44 @@ public final class ThreadLocalRandom extends Random {
     static final String BAD_SIZE  = "size must be non-negative";
 
     // Unsafe mechanics
-    private static final Unsafe U = Unsafe.getUnsafe();
-    private static final long SEED
-        = U.objectFieldOffset(Thread.class, "threadLocalRandomSeed");
-    private static final long PROBE
-        = U.objectFieldOffset(Thread.class, "threadLocalRandomProbe");
-    private static final long SECONDARY
-        = U.objectFieldOffset(Thread.class, "threadLocalRandomSecondarySeed");
-    private static final long THREADLOCALS
-        = U.objectFieldOffset(Thread.class, "threadLocals");
-    private static final long INHERITABLETHREADLOCALS
-        = U.objectFieldOffset(Thread.class, "inheritableThreadLocals");
-    private static final long INHERITEDACCESSCONTROLCONTEXT
-        = U.objectFieldOffset(Thread.class, "inheritedAccessControlContext");
-
+    private static final Unsafe U;
+    private static final JavaLangAccess JLA;
+    private static final long SEED;
+    private static final long PROBE;
+    private static final long SECONDARY;
+    private static final long THREADLOCALS;
+    private static final long INHERITABLETHREADLOCALS;
+    private static final long INHERITEDACCESSCONTROLCONTEXT;
     /** Generates per-thread initialization/probe field */
-    private static final AtomicInteger probeGenerator = new AtomicInteger();
-
+    private static final AtomicInteger probeGenerator;
     /** The common ThreadLocalRandom */
-    private static final ThreadLocalRandom instance = new ThreadLocalRandom();
-
+    private static final ThreadLocalRandom instance;
     /**
      * The next seed for default constructors.
      */
-    private static final AtomicLong seeder
-        = new AtomicLong(RandomSupport.mixMurmur64(System.currentTimeMillis()) ^
-                         RandomSupport.mixMurmur64(System.nanoTime()));
+    private static final AtomicLong seeder;
+
+    static {
+        Class<?> clazz;
+        try {
+            clazz = Class.forName("java.lang.Thread$FieldHolder");
+        } catch(Throwable e) {
+            throw new ExceptionInInitializerError(e);
+        }
+
+        U = Unsafe.getUnsafe();
+        JLA = jdk.internal.access.SharedSecrets.getJavaLangAccess();
+        SEED = U.objectFieldOffset(clazz, "threadLocalRandomSeed");
+        PROBE = U.objectFieldOffset(clazz, "threadLocalRandomProbe");
+        SECONDARY = U.objectFieldOffset(clazz, "threadLocalRandomSecondarySeed");
+        THREADLOCALS = U.objectFieldOffset(Thread.class, "threadLocals");
+        INHERITABLETHREADLOCALS = U.objectFieldOffset(Thread.class, "inheritableThreadLocals");
+        INHERITEDACCESSCONTROLCONTEXT = U.objectFieldOffset(Thread.class, "inheritedAccessControlContext");
+
+        probeGenerator = new AtomicInteger();
+        instance = new ThreadLocalRandom();
+        seeder = new AtomicLong(RandomSupport.mixMurmur64(System.currentTimeMillis()) ^ RandomSupport.mixMurmur64(System.nanoTime()));
+    }
 
     // used by ExtentLocal
     private static class Access {
@@ -683,4 +700,11 @@ public final class ThreadLocalRandom extends Random {
         return AbstractSpliteratorGenerator.doubles(ThreadLocalRandomProxy.PROXY, randomNumberOrigin, randomNumberBound);
     }
 
+    static Object holder(Thread t) {
+        return JLA.fieldHolder(t);
+    }
+
+    static Object holder() {
+        return holder(Thread.currentThread());
+    }
 }

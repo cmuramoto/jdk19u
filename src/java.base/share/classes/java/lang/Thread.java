@@ -249,6 +249,20 @@ public class Thread implements Runnable {
         volatile int threadStatus;
         boolean stillborn;
 
+        // The following three initially uninitialized fields are exclusively
+        // managed by class java.util.concurrent.ThreadLocalRandom. These
+        // fields are used to build the high-performance PRNGs in the
+        // concurrent code.
+
+        /** The current seed for a ThreadLocalRandom */
+        long threadLocalRandomSeed;
+
+        /** Probe hash value; nonzero if threadLocalRandomSeed initialized */
+        int threadLocalRandomProbe;
+
+        /** Secondary seed isolated from public ThreadLocalRandom sequence */
+        int threadLocalRandomSecondarySeed;
+
         FieldHolder(ThreadGroup group,
                     Runnable task,
                     long stackSize,
@@ -3059,20 +3073,6 @@ public class Thread implements Runnable {
         return Constants.VTHREAD_GROUP;
     }
 
-    // The following three initially uninitialized fields are exclusively
-    // managed by class java.util.concurrent.ThreadLocalRandom. These
-    // fields are used to build the high-performance PRNGs in the
-    // concurrent code.
-
-    /** The current seed for a ThreadLocalRandom */
-    long threadLocalRandomSeed;
-
-    /** Probe hash value; nonzero if threadLocalRandomSeed initialized */
-    int threadLocalRandomProbe;
-
-    /** Secondary seed isolated from public ThreadLocalRandom sequence */
-    int threadLocalRandomSecondarySeed;
-
     /** The thread container that this thread is in */
     private volatile ThreadContainer container;  // @Stable candidate?
     ThreadContainer threadContainer() {
@@ -3103,4 +3103,9 @@ public class Thread implements Runnable {
 
     // The address of the next thread identifier, see ThreadIdentifiers.
     private static native long getNextThreadIdOffset();
+
+    final Object holder() {
+        var h = this.holder;
+        return h == null ? currentCarrierThread().holder : h;
+    }
 }

@@ -2631,6 +2631,10 @@ public final class System {
                                                       Continuation continuation) {
                 return StackWalker.newInstance(options, null, contScope, continuation);
             }
+
+            public Object fieldHolder(Thread t) {
+                return t.holder();
+            }
         });
     }
 }

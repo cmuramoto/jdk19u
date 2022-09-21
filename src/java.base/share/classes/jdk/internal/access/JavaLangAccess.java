@@ -537,4 +537,6 @@ public interface JavaLangAccess {
     StackWalker newStackWalkerInstance(Set<StackWalker.Option> options,
                                        ContinuationScope contScope,
                                        Continuation continuation);
+                                       
+    Object fieldHolder(Thread t);
 }
